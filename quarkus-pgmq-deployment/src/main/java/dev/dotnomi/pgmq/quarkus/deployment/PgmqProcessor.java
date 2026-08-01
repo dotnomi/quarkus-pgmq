@@ -299,9 +299,7 @@ class PgmqProcessor {
         recorder.registerListeners(listeners.stream().map(ListenerMethodBuildItem::listener).collect(Collectors.toList()));
     }
 
-    // ----------------------------------------------------------------------------------------
-    // Signature analysis
-    // ----------------------------------------------------------------------------------------
+    // --- Signature analysis ---
 
     private record Signature(String kind, String payloadClassName) { }
 
@@ -376,9 +374,7 @@ class PgmqProcessor {
             + "(PgmqMessage<T> message, PgmqContext context), or (List<PgmqMessage<T>> batch)";
     }
 
-    // ----------------------------------------------------------------------------------------
-    // Cross-handler validation
-    // ----------------------------------------------------------------------------------------
+    // --- Cross-handler validation ---
 
     /** All handlers of a queue share one container, so their per-queue settings must agree. */
     private List<String> validateQueueConsistency(IndexView index) {

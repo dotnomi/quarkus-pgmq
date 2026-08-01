@@ -58,7 +58,7 @@ class PgmqListenerRegistrarTest {
             registrar.stop(id)
             assertThat(registrar.state(id)).isEqualTo(ListenerState.STOPPED)
 
-            // Nach dem Stop bleiben Nachrichten liegen, statt in die DLQ zu wandern.
+            // After a stop the messages stay in the queue instead of moving to the DLQ.
             template.send(queue, OrderDto("A-2", 1, emptyList()))
             Thread.sleep(800)
             assertThat(received).containsExactly("A-1")
@@ -194,7 +194,7 @@ class PgmqListenerRegistrarTest {
             )
             registrar.startAll()
 
-            assertThatThrownBy { registrar.start("gibt-es-nicht") }
+            assertThatThrownBy { registrar.start("does-not-exist") }
                 .isInstanceOf(IllegalArgumentException::class.java)
                 .hasMessageContaining("No listener with id")
                 .hasMessageContaining(queue)

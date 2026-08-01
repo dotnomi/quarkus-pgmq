@@ -611,7 +611,7 @@ class PgmqTemplate private constructor(
                 ps.setString(1, Identifiers.requireValidQueueName(queue))
                 ps.setLong(2, msgId)
                 ps.setInt(3, timeout.inWholeSeconds.toInt())
-                ps.executeQuery().use { /* Ergebnis wird nicht gebraucht */ }
+                ps.executeQuery().use { /* result is not needed */ }
             }
         }
     }

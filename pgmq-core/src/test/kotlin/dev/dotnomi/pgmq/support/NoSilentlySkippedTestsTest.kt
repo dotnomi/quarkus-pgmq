@@ -6,16 +6,16 @@ import java.io.File
 import java.nio.file.Files
 
 /**
- * Absicherung gegen eine Falle, die bereits zugeschlagen hat: **JUnit Jupiter erkennt nur
- * Testmethoden mit `void`-Rueckgabe.**
+ * Guards against a trap that has already been sprung here: **JUnit Jupiter only recognises test
+ * methods that return `void`.**
  *
- * In Kotlin verleitet der Ausdrucksrumpf dazu, versehentlich einen Wert zurueckzugeben —
- * `fun test() = withQueue { … assertThat(x).hasSize(1) }` gibt den AssertJ-Assert zurueck und wird
- * damit **stillschweigend nicht ausgefuehrt**. Kein Fehler, keine Warnung, der Test zaehlt einfach
- * nicht mit. Beim ersten Durchlauf dieses Projekts verschwanden so 18 von 27 Tests.
+ * Kotlin's expression body makes it easy to return a value by accident —
+ * `fun test() = withQueue { … assertThat(x).hasSize(1) }` returns the AssertJ assertion and is
+ * therefore **silently never run**. No error, no warning, the test simply does not count. On this
+ * project's first run 18 of 27 tests vanished that way.
  *
- * Dieser Test laedt die kompilierten Testklassen und schlaegt Alarm, wenn eine `@Test`-Methode
- * etwas anderes als `void` zurueckgibt.
+ * This test loads the compiled test classes and raises the alarm when an `@Test` method returns
+ * anything other than `void`.
  */
 class NoSilentlySkippedTestsTest {
     @Test
@@ -24,7 +24,7 @@ class NoSilentlySkippedTestsTest {
             javaClass.protectionDomain.codeSource.location.toURI(),
         )
         assertThat(classesRoot)
-            .describedAs("Wurzel der kompilierten Testklassen")
+            .describedAs("root of the compiled test classes")
             .exists()
 
         val offenders = mutableListOf<String>()
@@ -45,7 +45,7 @@ class NoSilentlySkippedTestsTest {
                             it.annotationClass.qualifiedName == "org.junit.jupiter.api.Test"
                         }
                         if (isTest && method.returnType != Void.TYPE) {
-                            offenders += "${clazz.name}#${method.name} gibt ${method.returnType.simpleName} zurueck"
+                            offenders += "${clazz.name}#${method.name} returns ${method.returnType.simpleName}"
                         }
                     }
                 }
@@ -53,9 +53,8 @@ class NoSilentlySkippedTestsTest {
 
         assertThat(offenders)
             .describedAs(
-                "Diese @Test-Methoden werden von JUnit NICHT ausgefuehrt, weil sie einen Wert " +
-                    "zurueckgeben. In Kotlin den Rueckgabetyp explizit auf ': Unit' setzen oder " +
-                    "einen Block-Rumpf verwenden.",
+                "JUnit does NOT run these @Test methods because they return a value. In Kotlin, " +
+                    "state the return type as ': Unit' explicitly, or use a block body.",
             )
             .isEmpty()
     }

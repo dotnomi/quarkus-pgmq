@@ -168,9 +168,7 @@ class PgmqPublishInvoker(
         CorrelationPolicy.INHERIT -> PgmqExchangeContext.inherited().causationId
     }
 
-    // ------------------------------------------------------------------------------------------
-    // Settings resolution
-    // ------------------------------------------------------------------------------------------
+    // --- Settings resolution ---
 
     private class Settings(
         val queue: String,

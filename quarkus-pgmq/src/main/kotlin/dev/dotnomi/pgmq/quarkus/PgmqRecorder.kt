@@ -226,9 +226,7 @@ open class PgmqRecorder {
             ?.also { it.isAccessible = true }
             ?: error("Method '$methodName' not found on ${beanClass.name}.")
 
-    // ------------------------------------------------------------------------------------------
-    // Value resolution
-    // ------------------------------------------------------------------------------------------
+    // --- Value resolution ---
 
     /**
      * Resolves a `${config.key}` expression against the runtime configuration; any other value is

@@ -34,6 +34,8 @@ data class ListenerStats(
     val deadLettered: Long,
     val inFlight: Int,
     val lastPollAt: java.time.Instant?,
+    /** Completed read attempts, empty ones included. */
+    val polls: Long,
 )
 
 data class HandlerInfo(val name: String, val label: String?, val batch: Boolean)
@@ -82,6 +84,7 @@ class PgmqListenerContainer(
     private val deadLettered = AtomicLong()
     private val inFlight = AtomicInteger()
     private val lastPollAt = AtomicReference<java.time.Instant?>(null)
+    private val polls = AtomicLong()
 
     private var executor: ExecutorService? = null
     private var workersFinished: CountDownLatch? = null
@@ -232,14 +235,13 @@ class PgmqListenerContainer(
             deadLettered = deadLettered.get(),
             inFlight = inFlight.get(),
             lastPollAt = lastPollAt.get(),
+            polls = polls.get(),
         ),
     )
 
     private fun handlerNames() = (labelled.values + listOfNotNull(catchAll)).map { it.name }
 
-    // ------------------------------------------------------------------------------------------
-    // Poll loop
-    // ------------------------------------------------------------------------------------------
+    // --- Poll loop ---
 
     private fun workerLoop() {
         while (running.get() && !Thread.currentThread().isInterrupted) {
@@ -258,10 +260,11 @@ class PgmqListenerContainer(
             }
 
             lastPollAt.set(java.time.Instant.now())
+            polls.incrementAndGet()
 
             if (batch.isEmpty()) {
-                // Nur im Leerlauf wird gewartet. Sind Nachrichten da, wird ohne Pause weitergelesen,
-                // damit grosse Rueckstaende am Stueck abgearbeitet werden.
+                // Only an idle queue waits. While messages keep coming the loop reads on without
+                // pausing, so a large backlog drains in one go.
                 if (!sleepInterruptible(spec.pollInterval)) return
                 continue
             }
@@ -372,7 +375,8 @@ class PgmqListenerContainer(
 
         while (remaining.isNotEmpty()) {
             if (!running.get() || Thread.currentThread().isInterrupted) {
-                // Shutdown: Rest sofort freigeben, damit der naechste Pod ihn greift.
+                // Shutting down: release the rest at once so the next pod picks it up instead of
+                // waiting out the visibility timeout.
                 releaseImmediately(remaining)
                 return
             }
@@ -386,8 +390,8 @@ class PgmqListenerContainer(
             }
 
             if (spec.vtRefresh && remaining.isNotEmpty()) {
-                // Timeout der noch offenen Nachrichten nachziehen, damit ein langer Batch sie nicht
-                // ueberfaellig werden laesst.
+                // Extend the timeout of the messages still queued up, so a long batch cannot let
+                // them fall due while they wait their turn.
                 runCatching {
                     template.setVisibilityTimeout(
                         spec.queue,
@@ -399,8 +403,8 @@ class PgmqListenerContainer(
 
             val outcome = processOne(message)
 
-            // Im FIFO-Modus darf nach einem Fehlschlag nichts Weiteres derselben Gruppe laufen,
-            // sonst ist die Reihenfolge verletzt.
+            // In FIFO mode nothing else of the same group may run after a failure, or the
+            // ordering guarantee is broken.
             if (outcome == Outcome.FAILED_RETRYABLE && spec.readStrategy != ReadStrategy.PLAIN) {
                 if (remaining.isNotEmpty()) {
                     log.warn(
@@ -502,8 +506,8 @@ class PgmqListenerContainer(
         val typed = raw.withPayload(convert(handler, raw.payload))
         val context = ContainerContext(raw)
 
-        // Der Envelope liegt fuer die Dauer des Handlers im Kontext, damit ein `send` daraus
-        // correlationId erbt und causationId automatisch setzt.
+        // The envelope stays in the context for the duration of the handler, so a `send` from
+        // inside it inherits correlationId and sets causationId by itself.
         PgmqExchangeContext.with(envelope) {
             (handler as RegisteredHandler<Any?>).handle(listOf(typed) as List<PgmqMessage<Any?>>, context)
         }
@@ -651,7 +655,7 @@ class PgmqListenerContainer(
         }
     }
 
-    /** Unterbrechbares Warten. Gibt `false` zurueck, wenn der Thread beendet werden soll. */
+    /** Interruptible wait. Returns `false` when the thread should stop. */
     private fun sleepInterruptible(duration: Duration): Boolean = try {
         if (duration > Duration.ZERO) Thread.sleep(duration.inWholeMilliseconds)
         true

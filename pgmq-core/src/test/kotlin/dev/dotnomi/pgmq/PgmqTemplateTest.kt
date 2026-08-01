@@ -14,9 +14,7 @@ import kotlin.time.Duration.Companion.seconds
 class PgmqTemplateTest {
     private val template = PgmqTestDatabase.template()
 
-    // ------------------------------------------------------------------------------------------
-    // Queue-Verwaltung
-    // ------------------------------------------------------------------------------------------
+    // --- Queue administration ---
 
     @Test
     fun `create list exists and drop queue`() {
@@ -63,9 +61,7 @@ class PgmqTemplateTest {
             .hasMessageContaining("at most 47")
     }
 
-    // ------------------------------------------------------------------------------------------
-    // Senden und Lesen
-    // ------------------------------------------------------------------------------------------
+    // --- Sending and reading ---
 
     @Test
     fun `send and read round trip preserves typed payload`(): Unit = withQueue { queue ->
@@ -139,7 +135,7 @@ class PgmqTemplateTest {
         assertThat(message.headers).containsExactlyInAnyOrderEntriesOf(
             mapOf("priority" to "high", "tenant" to "acme"),
         )
-        // Envelope-Felder tauchen NICHT unter den Nutzer-Headern auf.
+        // Envelope fields do NOT show up among the user headers.
         assertThat(message.headers.keys).doesNotContain("messageId", "label", "sourceId")
     }
 
@@ -180,16 +176,14 @@ class PgmqTemplateTest {
         assertThat(template.metrics(queue).length).isEqualTo(1)
     }
 
-    // ------------------------------------------------------------------------------------------
-    // Visibility-Timeout und Bestaetigen
-    // ------------------------------------------------------------------------------------------
+    // --- Visibility timeout and acknowledgement ---
 
     @Test
     fun `read hides the message for the visibility timeout`(): Unit = withQueue { queue ->
         template.send(queue, OrderDto("E-1", 1, emptyList()))
 
         assertThat(template.read<OrderDto>(queue, visibilityTimeout = 60.seconds)).hasSize(1)
-        // Zweiter Lesevorgang sieht nichts: die Nachricht ist noch in Bearbeitung.
+        // A second read sees nothing: the message is still being processed.
         assertThat(template.read<OrderDto>(queue, visibilityTimeout = 60.seconds)).isEmpty()
     }
 
@@ -199,7 +193,8 @@ class PgmqTemplateTest {
         template.read<OrderDto>(queue, visibilityTimeout = 300.seconds)
         assertThat(template.read<OrderDto>(queue)).isEmpty()
 
-        // Der Mechanismus hinter Graceful Shutdown: sofort freigeben statt auf vt-Ablauf zu warten.
+        // The mechanism behind graceful shutdown: release at once instead of waiting for the
+        // visibility timeout to expire.
         template.setVisibilityTimeout(queue, msgId, kotlin.time.Duration.ZERO)
 
         val again = template.read<OrderDto>(queue)
@@ -246,9 +241,7 @@ class PgmqTemplateTest {
         assertThat(template.metrics(queue).length).isZero()
     }
 
-    // ------------------------------------------------------------------------------------------
-    // Kennzahlen
-    // ------------------------------------------------------------------------------------------
+    // --- Metrics ---
 
     @Test
     fun `metrics distinguishes total length from visible length`(): Unit = withQueue { queue ->
@@ -258,7 +251,7 @@ class PgmqTemplateTest {
         val metrics = template.metrics(queue)
         assertThat(metrics.name).isEqualTo(queue)
         assertThat(metrics.length).isEqualTo(5)
-        // Zwei Nachrichten sind in Bearbeitung, also nicht abholbar.
+        // Two messages are in flight and therefore not available to read.
         assertThat(metrics.visibleLength).isEqualTo(3)
         assertThat(metrics.totalMessages).isGreaterThanOrEqualTo(5)
     }
@@ -269,9 +262,7 @@ class PgmqTemplateTest {
         assertThat(template.metricsAll().map { it.name }).contains(queue)
     }
 
-    // ------------------------------------------------------------------------------------------
-    // Transaktionen
-    // ------------------------------------------------------------------------------------------
+    // --- Transactions ---
 
     @Test
     fun `rolled back transaction leaves no message in the queue`(): Unit = withQueue { queue ->
@@ -279,9 +270,9 @@ class PgmqTemplateTest {
             template.inTransaction { tx ->
                 tx.send(queue, OrderDto("I-1", 1, emptyList()))
                 tx.send(queue, OrderDto("I-2", 1, emptyList()))
-                error("Fachlicher Fehler nach dem Senden")
+                error("Business failure after the send")
             }
-        }.hasMessageContaining("Fachlicher Fehler")
+        }.hasMessageContaining("Business failure")
 
         assertThat(template.metrics(queue).length).isZero()
     }
@@ -308,9 +299,7 @@ class PgmqTemplateTest {
         assertThat(template.metrics(queue).length).isZero()
     }
 
-    // ------------------------------------------------------------------------------------------
-    // Korrelation
-    // ------------------------------------------------------------------------------------------
+    // --- Correlation ---
 
     @Test
     fun `send inside a handler context inherits correlation and sets causation`(): Unit = withQueue { queue ->
@@ -345,20 +334,20 @@ class PgmqTemplateTest {
 
     @Test
     fun `causation chain survives three hops`(): Unit = withQueue { queue ->
-        // Hop 1: ausserhalb jedes Kontexts
+        // Hop 1, outside any context
         template.send(queue, OrderDto("K-1", 1, emptyList()), label = "Hop1")
         val hop1 = template.read<OrderDto>(queue).single().envelope!!
 
-        // Hop 2: im Kontext von Hop 1
+        // Hop 2, inside the context of hop 1
         PgmqExchangeContext.with(hop1) { template.send(queue, OrderDto("K-2", 1, emptyList()), label = "Hop2") }
         val hop2 = template.read<OrderDto>(queue).single().envelope!!
 
-        // Hop 3: im Kontext von Hop 2
+        // Hop 3, inside the context of hop 2
         PgmqExchangeContext.with(hop2) { template.send(queue, OrderDto("K-3", 1, emptyList()), label = "Hop3") }
         val hop3 = template.read<OrderDto>(queue).single().envelope!!
 
         assertThat(listOf(hop1, hop2, hop3).map { it.correlationId }.distinct())
-            .describedAs("correlationId bleibt ueber den gesamten Ablauf gleich")
+            .describedAs("correlationId stays the same across the whole flow")
             .hasSize(1)
 
         assertThat(hop2.causationId).isEqualTo(hop1.messageId)
@@ -382,9 +371,7 @@ class PgmqTemplateTest {
         assertThat(PgmqExchangeContext.current()).isNull()
     }
 
-    // ------------------------------------------------------------------------------------------
-    // Sonstiges
-    // ------------------------------------------------------------------------------------------
+    // --- Miscellaneous ---
 
     @Test
     fun `extension version is readable`() {
@@ -410,15 +397,15 @@ class PgmqTemplateTest {
         template.send(queue, mapOf("n" to 1), label = "Wanted")
         template.send(queue, mapOf("n" to 2), label = "Unwanted")
 
-        // Dokumentiert die verifizierte Einschraenkung: der conditional-Filter matcht nur auf die
-        // message-Spalte. Ein Filter auf ein Envelope-Feld findet daher nichts.
+        // Documents a verified limitation: the conditional filter matches the message column
+        // only, so filtering on an envelope field finds nothing.
         val byLabel = template.read<Map<String, Any>>(
             queue = queue,
             quantity = 10,
             conditional = """{"label":"Wanted"}""",
         )
         assertThat(byLabel)
-            .describedAs("Envelope-Felder sind nicht serverseitig filterbar — daher Label-Dispatch in-process")
+            .describedAs("envelope fields cannot be filtered server-side — hence in-process label dispatch")
             .isEmpty()
     }
 }

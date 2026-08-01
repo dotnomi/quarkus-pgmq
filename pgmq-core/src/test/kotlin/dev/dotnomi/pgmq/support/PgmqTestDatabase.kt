@@ -7,8 +7,8 @@ import java.util.UUID
 import javax.sql.DataSource
 
 /**
- * Zugang zum lokal laufenden pgmq-Container. Verbindungsdaten kommen aus System-Properties, die
- * das Root-`build.gradle.kts` setzt.
+ * Access to the locally running pgmq container. Connection details come from system properties set
+ * by the root `build.gradle.kts`.
  */
 object PgmqTestDatabase {
     val dataSource: DataSource by lazy {
@@ -17,8 +17,8 @@ object PgmqTestDatabase {
                 jdbcUrl = System.getProperty("pgmq.test.jdbc-url", "jdbc:postgresql://localhost:5432/postgres")
                 username = System.getProperty("pgmq.test.user", "postgres")
                 password = System.getProperty("pgmq.test.password", "postgres")
-                // Reichlich Connections, damit die Nebenlaeufigkeitstests nicht am Pool haengen
-                // statt am zu untersuchenden Verhalten.
+                // Plenty of connections, so the concurrency tests block on the behaviour under
+                // test rather than on the pool.
                 maximumPoolSize = 16
                 poolName = "pgmq-test"
             },
@@ -29,9 +29,8 @@ object PgmqTestDatabase {
         PgmqTemplate(dataSource, sourceId = sourceId)
 
     /**
-     * Erzeugt eine Queue mit zufaelligem Namen, fuehrt [block] aus und raeumt danach auf — auch wenn
-     * der Test fehlschlaegt. Zufaellige Namen, damit parallele Testlaeufe sich nicht ins Gehege
-     * kommen.
+     * Creates a randomly named queue, runs [block] and cleans up afterwards — including when the
+     * test fails. The random name keeps parallel test runs out of each other's way.
      */
     fun <R> withQueue(prefix: String = "t", fifo: Boolean = false, block: (String) -> R): R {
         val template = template()
@@ -49,7 +48,7 @@ object PgmqTestDatabase {
         "${prefix}_${UUID.randomUUID().toString().replace("-", "").take(16)}"
 }
 
-/** Testpayload mit mehreren Feldtypen, um die Serialisierung wirklich zu pruefen. */
+/** Test payload with several field types, so serialization is genuinely exercised. */
 data class OrderDto(
     val orderId: String,
     val amountCents: Long,

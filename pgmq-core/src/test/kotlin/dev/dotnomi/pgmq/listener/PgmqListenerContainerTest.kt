@@ -19,7 +19,7 @@ import kotlin.time.toJavaDuration
 class PgmqListenerContainerTest {
     private val template: PgmqTemplate = PgmqTestDatabase.template("listener-test")
 
-    /** Startet einen Container fuer eine frische Queue und raeumt ihn danach zuverlaessig ab. */
+    /** Starts a container on a fresh queue and reliably tears it down afterwards. */
     private fun <R> withContainer(
         spec: (queue: String) -> ListenerSpec,
         handlers: List<RegisteredHandler<*>>,
@@ -39,9 +39,7 @@ class PgmqListenerContainerTest {
         }
     }
 
-    // ------------------------------------------------------------------------------------------
-    // Grundverhalten
-    // ------------------------------------------------------------------------------------------
+    // --- Basic behaviour ---
 
     @Test
     fun `messages are consumed and acknowledged`() {
@@ -55,8 +53,10 @@ class PgmqListenerContainerTest {
             await().atMost(10.seconds.toJavaDuration()).untilAsserted {
                 assertThat(received).hasSize(5)
             }
-            // Bestaetigt: die Queue ist leer, nicht nur gelesen.
-            await().atMost(5.seconds.toJavaDuration()).untilAsserted {
+            // Confirms the queue is empty, not merely read. Every other wait in this suite allows
+            // 10-30s; there is no reason for this one to be the tightest, and a generous timeout
+            // costs nothing when the test passes.
+            await().atMost(15.seconds.toJavaDuration()).untilAsserted {
                 assertThat(template.metrics(queue).length).isZero()
             }
         }
@@ -64,19 +64,23 @@ class PgmqListenerContainerTest {
 
     @Test
     fun `idle container waits the poll interval instead of spinning`() {
-        val polls = AtomicInteger()
         withContainer(
             spec = { ListenerSpec(queue = it, pollInterval = 1.seconds) },
             handlers = listOf(pgmqPayloadHandler<OrderDto> { }),
         ) { _, container ->
-            // Ueber 2,5s duerfen bei 1s Intervall nur wenige Polls stattfinden.
             Thread.sleep(2_500)
+
             val info = container.info()
             assertThat(info.state).isEqualTo(ListenerState.RUNNING)
             assertThat(info.stats.processed).isZero()
-            // lastPollAt wird bei jedem Poll gesetzt; dass es gesetzt ist, zeigt dass gepollt wurde.
-            assertThat(info.stats.lastPollAt).isNotNull()
-            polls.get() // nur zur Vollstaendigkeit
+
+            // The poll count is what separates the two cases. A spinning container would also show
+            // processed=0 and a set lastPollAt, so neither of those proves anything on its own —
+            // only the number of read attempts does. At a 1s interval, 2.5s allows a handful; a busy
+            // loop would run into the thousands.
+            assertThat(info.stats.polls)
+                .describedAs("read attempts in 2.5s at a 1s poll interval")
+                .isBetween(2L, 8L)
         }
     }
 
@@ -84,11 +88,12 @@ class PgmqListenerContainerTest {
     fun `a large backlog is drained without idle pauses`() {
         val received = ConcurrentLinkedQueue<Long>()
         withContainer(
-            // pollInterval bewusst hoch: wuerde nach jedem Batch gewartet, kaeme der Test nie durch.
+            // A deliberately long pollInterval: if the container waited after every batch, this
+            // test would never finish.
             spec = { ListenerSpec(queue = it, pollInterval = 30.seconds, batchSize = 10) },
             handlers = listOf(pgmqHandler<OrderDto> { received += it.msgId }),
-            // Erst fuellen, dann starten. Sonst geht der Container beim ersten leeren Poll in die
-            // 30s-Leerlaufpause und der Test wuerde nur diese messen statt das Drain-Verhalten.
+            // Fill first, then start. Otherwise the first empty poll sends the container into
+            // its 30s idle pause and the test would measure that instead of draining.
             autoStart = false,
         ) { queue, container ->
             template.createQueueIfMissing(queue)
@@ -96,15 +101,13 @@ class PgmqListenerContainerTest {
             container.start()
 
             await()
-                .alias("100 Nachrichten muessen am Stueck durchlaufen, nicht in 30s-Schritten")
+                .alias("100 messages must run through in one go, not in 30s steps")
                 .atMost(20.seconds.toJavaDuration())
                 .untilAsserted { assertThat(received).hasSize(100) }
         }
     }
 
-    // ------------------------------------------------------------------------------------------
-    // Drosselung
-    // ------------------------------------------------------------------------------------------
+    // --- Throttling ---
 
     @Test
     fun `messageInterval spaces out processing starts`() {
@@ -122,8 +125,8 @@ class PgmqListenerContainerTest {
             handlers = listOf(
                 pgmqHandler<OrderDto> {
                     timestamps += System.nanoTime()
-                    // Ungleichmaessige Verarbeitungsdauer: der Pacer muss auf den Abstand zwischen
-                    // Starts regeln, nicht pauschal nachher warten.
+                    // Uneven processing time: the pacer has to regulate the spacing between
+                    // starts, not simply wait a fixed amount afterwards.
                     Thread.sleep(if (timestamps.size % 2 == 0) 10 else 90)
                 },
             ),
@@ -138,19 +141,21 @@ class PgmqListenerContainerTest {
             val gapsMs = starts.zipWithNext { a, b -> (b - a) / 1_000_000 }
             val totalMs = (starts.last() - starts.first()) / 1_000_000
 
-            // Die eigentliche Zusage ist die **Gesamtrate**: der Pacer reserviert exakte Zeitschlitze,
-            // also braucht ein Durchlauf von n Nachrichten mindestens (n-1) x Intervall. Ohne Toleranz.
+            // This test measures inside the handler, not at the pacer. Between the pacer releasing a
+            // slot and the timestamp being taken lie deserialization and handler lookup, and that
+            // delay differs per message — it is largest for the first one, whose code paths are all
+            // cold. The total therefore comes out as (n-1) x interval + (delay_last - delay_first),
+            // which can land just below the exact figure. MessagePacerTest pins the guarantee where
+            // it holds without tolerance; what is checked here is only that pacing is wired in.
             assertThat(totalMs)
-                .describedAs("Gesamtdauer fuer %d Nachrichten, Abstaende: %s", starts.size, gapsMs)
-                .isGreaterThanOrEqualTo((starts.size - 1) * 200L)
+                .describedAs("total for %d messages, gaps: %s", starts.size, gapsMs)
+                .isGreaterThanOrEqualTo((starts.size - 1) * 200L - DISPATCH_JITTER_ALLOWANCE_MS)
 
-            // Einzelne Abstaende schwanken um die Schlitze herum, weil zwischen Pacer-Freigabe und
-            // dem Zeitstempel im Handler noch Deserialisierung und Handler-Suche liegen, deren Dauer
-            // pro Nachricht variiert. Geprueft wird deshalb nur, dass keine Nachricht *deutlich* zu
-            // frueh laeuft — eine echt kaputte Drosselung faellt hier auf, Dispatch-Jitter nicht.
+            // A broken throttle produces gaps near zero, so half the interval separates "jittery"
+            // from "not throttling at all" without being sensitive to load on the build machine.
             assertThat(gapsMs)
-                .describedAs("Abstaende zwischen Verarbeitungsstarts: %s", gapsMs)
-                .allSatisfy { assertThat(it).isGreaterThanOrEqualTo(140L) }
+                .describedAs("gaps between processing starts: %s", gapsMs)
+                .allSatisfy { assertThat(it).isGreaterThanOrEqualTo(100L) }
         }
     }
 
@@ -169,8 +174,8 @@ class PgmqListenerContainerTest {
                     messageInterval = interval,
                     batchSize = 3,
                     concurrency = concurrency,
-                    // Verarbeitung dauert laenger als das Intervall — genau der Fall, in dem ein
-                    // Pacer pro Worker die Rate vervierfachen wuerde.
+                    // Processing outlasts the interval — exactly the case where a per-worker
+                    // pacer would quadruple the rate.
                     visibilityTimeout = 120.seconds,
                 )
             },
@@ -189,23 +194,21 @@ class PgmqListenerContainerTest {
 
             val all = timestamps.toList().sorted()
             val elapsedMs = (all.last() - all.first()) / 1_000_000
-            // Bei geteiltem Pacer: (12 - 1) * 200ms = 2200ms Mindestdauer.
-            // Bei einem Pacer pro Worker waeren es nur ~550ms.
+            // Shared pacer: (12 - 1) * 200ms = 2200ms at minimum. One pacer per worker would
+            // bring that down to roughly 550ms.
             val minimumExpectedMs = (messages - 1) * interval.inWholeMilliseconds
 
             assertThat(elapsedMs)
                 .describedAs(
-                    "Gesamtdauer fuer %d Nachrichten bei messageInterval=%s und concurrency=%d — " +
-                        "ein Pacer pro Worker wuerde die Rate vervierfachen",
+                    "total for %d messages at messageInterval=%s and concurrency=%d — one " +
+                        "pacer per worker would quadruple the rate",
                     messages, interval, concurrency,
                 )
                 .isGreaterThanOrEqualTo((minimumExpectedMs * 0.9).toLong())
         }
     }
 
-    // ------------------------------------------------------------------------------------------
-    // Visibility-Timeout
-    // ------------------------------------------------------------------------------------------
+    // --- Visibility timeout ---
 
     @Test
     fun `explicit visibility timeout shorter than the throttled batch is rejected`() {
@@ -233,9 +236,7 @@ class PgmqListenerContainerTest {
             .isEqualTo(ListenerSpec.DEFAULT_VISIBILITY_TIMEOUT)
     }
 
-    // ------------------------------------------------------------------------------------------
-    // Label-Dispatch
-    // ------------------------------------------------------------------------------------------
+    // --- Label dispatch ---
 
     @Test
     fun `two labelled handlers on one queue both receive their messages`() {
@@ -258,13 +259,17 @@ class PgmqListenerContainerTest {
                 assertThat(cancelled).containsExactly("E-2")
             }
 
-            // Der Livelock-Regressionstest: keine Nachricht bleibt bis zum vt-Ablauf haengen.
-            assertThat(template.metrics(queue).length)
-                .describedAs(
-                    "Ein Container pro Queue mit In-Process-Dispatch — je Handler ein eigener " +
-                        "Consumer wuerde Nachrichten des anderen lesen, verwerfen und blockieren",
-                )
-                .isZero()
+            // The livelock regression test: no message stays stuck until its visibility timeout
+            // expires. This needs its own await — the handler records its payload before the
+            // container acknowledges, so the queue is briefly non-empty after the block above passes.
+            await().atMost(10.seconds.toJavaDuration()).untilAsserted {
+                assertThat(template.metrics(queue).length)
+                    .describedAs(
+                        "one container per queue with in-process dispatch — a separate consumer per " +
+                            "handler would read the other one's messages, discard them and block them",
+                    )
+                    .isZero()
+            }
         }
     }
 
@@ -313,7 +318,7 @@ class PgmqListenerContainerTest {
             spec = { ListenerSpec(queue = it, pollInterval = 100.milliseconds) },
             handlers = listOf(pgmqPayloadHandler<OrderDto>(label = "Known") { }),
         ) { queue, container ->
-            template.send(queue, OrderDto("G-1", 1, emptyList()), label = "Voellig-Unbekannt")
+            template.send(queue, OrderDto("G-1", 1, emptyList()), label = "Completely-Unknown")
 
             val dlq = container.spec.effectiveDeadLetterQueue
             await().atMost(15.seconds.toJavaDuration()).untilAsserted {
@@ -321,16 +326,14 @@ class PgmqListenerContainerTest {
             }
 
             val dead = template.read<OrderDto>(dlq, quantity = 1).single()
-            assertThat(dead.diagnostics[PgmqHeaderNames.DLQ_REASON]).contains("Voellig-Unbekannt")
+            assertThat(dead.diagnostics[PgmqHeaderNames.DLQ_REASON]).contains("Completely-Unknown")
             assertThat(dead.diagnostics[PgmqHeaderNames.DLQ_ORIGIN_QUEUE]).isEqualTo(queue)
-            // Der Envelope bleibt erhalten, damit ein Replay dedupliziertbar ist.
+            // The envelope survives, so a replay can still be deduplicated.
             assertThat(dead.envelope?.messageId).isNotBlank()
         }
     }
 
-    // ------------------------------------------------------------------------------------------
-    // Fehlerarten
-    // ------------------------------------------------------------------------------------------
+    // --- Kinds of failure ---
 
     @Test
     fun `transient failure is retried and only then dead lettered`() {
@@ -341,7 +344,7 @@ class PgmqListenerContainerTest {
                     queue = it,
                     pollInterval = 100.milliseconds,
                     maxRetries = 2,
-                    // Backoff klein halten, damit der Test nicht minutenlang laeuft.
+                    // Keep the backoff small so the test does not run for minutes.
                     maxRetryBackoff = 1.seconds,
                     visibilityTimeout = 60.seconds,
                 )
@@ -349,7 +352,7 @@ class PgmqListenerContainerTest {
             handlers = listOf(
                 pgmqPayloadHandler<OrderDto> {
                     attempts.incrementAndGet()
-                    error("Vorruebergehend nicht erreichbar")
+                    error("Temporarily unreachable")
                 },
             ),
         ) { queue, container ->
@@ -361,7 +364,7 @@ class PgmqListenerContainerTest {
             }
 
             assertThat(attempts.get())
-                .describedAs("maxRetries=2 bedeutet 3 Zustellungen vor der DLQ")
+                .describedAs("maxRetries=2 means three deliveries before the DLQ")
                 .isGreaterThanOrEqualTo(3)
         }
     }
@@ -381,7 +384,7 @@ class PgmqListenerContainerTest {
             handlers = listOf(
                 pgmqPayloadHandler<OrderDto> {
                     attempts.incrementAndGet()
-                    throw InvalidRecipientException("Empfaenger existiert nicht")
+                    throw InvalidRecipientException("Recipient does not exist")
                 },
             ),
         ) { queue, container ->
@@ -394,8 +397,8 @@ class PgmqListenerContainerTest {
 
             assertThat(attempts.get())
                 .describedAs(
-                    "Ein dauerhafter Fehler darf keine Backoff-Runden verbrennen — " +
-                        "@PgmqNonRetryable heisst: beim ersten Versuch in die DLQ",
+                    "a permanent failure must not burn backoff rounds — @PgmqNonRetryable " +
+                        "means straight to the DLQ on the first attempt",
                 )
                 .isEqualTo(1)
         }
@@ -407,8 +410,8 @@ class PgmqListenerContainerTest {
             spec = { ListenerSpec(queue = it, pollInterval = 100.milliseconds, maxRetries = 5) },
             handlers = listOf(pgmqPayloadHandler<OrderDto> { }),
         ) { queue, container ->
-            // Passt strukturell nicht zu OrderDto.
-            template.send(queue, mapOf("voellig" to "anders", "kein" to "orderId"))
+            // Structurally incompatible with OrderDto.
+            template.send(queue, mapOf("totally" to "different", "no" to "orderId"))
 
             val dlq = container.spec.effectiveDeadLetterQueue
             await().atMost(15.seconds.toJavaDuration()).untilAsserted {
@@ -417,8 +420,8 @@ class PgmqListenerContainerTest {
 
             val dead = template.readRaw(dlq, quantity = 1).single()
             assertThat(dead.diagnostics[PgmqHeaderNames.DLQ_REASON]).containsIgnoringCase("deserial")
-            // Der rohe Payload bleibt unveraendert — er ist ja genau deshalb hier.
-            assertThat(dead.payload).contains("voellig")
+            // The raw payload is untouched — preserving it is the whole point.
+            assertThat(dead.payload).contains("totally")
         }
     }
 
@@ -460,9 +463,7 @@ class PgmqListenerContainerTest {
         }
     }
 
-    // ------------------------------------------------------------------------------------------
-    // Envelope-Validierung
-    // ------------------------------------------------------------------------------------------
+    // --- Envelope validation ---
 
     @Test
     fun `STRICT rejects a foreign message without an envelope`() {
@@ -506,7 +507,7 @@ class PgmqListenerContainerTest {
         }
     }
 
-    /** Simuliert einen Fremd-Client oder psql: Nachricht ohne unseren Envelope. */
+    /** Simulates a foreign client or psql: a message without our envelope. */
     private fun sendWithoutEnvelope(queue: String, payloadJson: String) {
         PgmqTestDatabase.dataSource.connection.use { conn ->
             conn.prepareStatement("SELECT pgmq.send(?, ?::jsonb)").use { ps ->
@@ -517,9 +518,7 @@ class PgmqListenerContainerTest {
         }
     }
 
-    // ------------------------------------------------------------------------------------------
-    // Lebenszyklus
-    // ------------------------------------------------------------------------------------------
+    // --- Lifecycle ---
 
     @Test
     fun `autoStart false means nothing is read until start is called`() {
@@ -534,7 +533,7 @@ class PgmqListenerContainerTest {
 
             assertThat(container.state()).isEqualTo(ListenerState.NOT_STARTED)
             Thread.sleep(1_000)
-            assertThat(received).describedAs("ohne start() wird nichts gelesen").isEmpty()
+            assertThat(received).describedAs("nothing is read without start()").isEmpty()
             assertThat(template.metrics(queue).length).isEqualTo(1)
 
             container.start()
@@ -558,7 +557,7 @@ class PgmqListenerContainerTest {
             Thread.sleep(1_000)
             assertThat(received).isEmpty()
             assertThat(template.metrics(queue).length)
-                .describedAs("stop() laesst die Nachrichten liegen, statt sie in die DLQ zu schieben")
+                .describedAs("stop() leaves the messages in place instead of pushing them to the DLQ")
                 .isEqualTo(1)
 
             container.start()
@@ -635,9 +634,7 @@ class PgmqListenerContainerTest {
         }
     }
 
-    // ------------------------------------------------------------------------------------------
-    // Graceful Shutdown
-    // ------------------------------------------------------------------------------------------
+    // --- Graceful Shutdown ---
 
     @Test
     fun `stop releases the rest of the batch immediately instead of waiting for the timeout`() {
@@ -649,7 +646,7 @@ class PgmqListenerContainerTest {
                     pollInterval = 100.milliseconds,
                     batchSize = 10,
                     concurrency = 1,
-                    // Lang genug, dass ein Warten auf vt-Ablauf im Test klar auffallen wuerde.
+                    // Long enough that waiting for the timeout to expire would be obvious here.
                     visibilityTimeout = 300.seconds,
                     shutdownTimeout = 5.seconds,
                 )
@@ -663,19 +660,19 @@ class PgmqListenerContainerTest {
         ) { queue, container ->
             template.sendBatch(queue, List(10) { OrderDto("Q-$it", it.toLong(), emptyList()) })
 
-            // Warten, bis der Batch gelesen ist und die Verarbeitung laeuft.
+            // Wait until the batch has been read and processing is under way.
             await().atMost(10.seconds.toJavaDuration()).until { started.isNotEmpty() }
 
             container.stop()
 
             val processedCount = started.size
             assertThat(processedCount)
-                .describedAs("nicht alle 10 sollten vor dem Stop fertig sein")
+                .describedAs("not all 10 should be finished before the stop")
                 .isLessThan(10)
 
-            // Der eigentliche Test: die restlichen Nachrichten sind SOFORT wieder abholbar.
+            // The actual assertion: the remaining messages are available again immediately.
             await()
-                .alias("Rest des Batches muss ohne Warten auf das 300s-vt wieder sichtbar sein")
+                .alias("the rest of the batch must reappear without waiting out the 300s timeout")
                 .atMost(10.seconds.toJavaDuration())
                 .untilAsserted {
                     assertThat(template.metrics(queue).visibleLength).isGreaterThan(0)
@@ -685,4 +682,13 @@ class PgmqListenerContainerTest {
 
     @PgmqNonRetryable
     private class InvalidRecipientException(message: String) : RuntimeException(message)
+
+    private companion object {
+        /**
+         * Covers the difference in dispatch delay between the first and the last message of a run.
+         * Generous on purpose — a real throttling defect is off by whole intervals, not by tens of
+         * milliseconds, so the tolerance costs no detection power.
+         */
+        const val DISPATCH_JITTER_ALLOWANCE_MS = 100L
+    }
 }

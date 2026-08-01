@@ -27,9 +27,7 @@ class PgmqTopicOperations internal constructor(
 ) {
     private val log = LoggerFactory.getLogger(PgmqTopicOperations::class.java)
 
-    // ------------------------------------------------------------------------------------------
-    // Schema
-    // ------------------------------------------------------------------------------------------
+    // --- Schema ---
 
     /**
      * Creates the bookkeeping schema. Idempotent, safe to call from every starting pod.
@@ -72,9 +70,7 @@ class PgmqTopicOperations internal constructor(
         }
     }
 
-    // ------------------------------------------------------------------------------------------
-    // Topics and subscriptions
-    // ------------------------------------------------------------------------------------------
+    // --- Topics and subscriptions ---
 
     fun createTopic(topic: String) {
         template.runOnConnection { conn ->
@@ -230,9 +226,7 @@ class PgmqTopicOperations internal constructor(
         }
     }
 
-    // ------------------------------------------------------------------------------------------
-    // Publishing
-    // ------------------------------------------------------------------------------------------
+    // --- Publishing ---
 
     /**
      * Fans a message out to every subscriber of [topic].
@@ -283,9 +277,7 @@ class PgmqTopicOperations internal constructor(
         return targets.map { it.queue }
     }
 
-    // ------------------------------------------------------------------------------------------
-    // Janitor
-    // ------------------------------------------------------------------------------------------
+    // --- Janitor ---
 
     /**
      * Reclaims ephemeral queues whose owner died without unsubscribing.

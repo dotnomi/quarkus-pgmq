@@ -1,0 +1,56 @@
+[versions]
+kotlin = "2.4.0"
+quarkus = "3.37.4"
+jackson = "2.22.0"
+slf4j = "2.0.18"
+logback = "1.5.36"
+postgresql = "42.7.7"
+hikari = "6.3.0"
+junit = "5.13.3"
+assertj = "3.27.3"
+awaitility = "4.3.0"
+mavenPublish = "0.33.0"
+dokka = "2.2.0"
+
+[libraries]
+# --- pgmq-core (runtime) ---
+jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
+jackson-module-kotlin = { module = "com.fasterxml.jackson.module:jackson-module-kotlin", version.ref = "jackson" }
+jackson-datatype-jsr310 = { module = "com.fasterxml.jackson.datatype:jackson-datatype-jsr310", version.ref = "jackson" }
+slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
+
+# --- Quarkus ---
+quarkus-bom = { module = "io.quarkus:quarkus-bom", version.ref = "quarkus" }
+quarkus-core = { module = "io.quarkus:quarkus-core", version.ref = "quarkus" }
+quarkus-core-deployment = { module = "io.quarkus:quarkus-core-deployment", version.ref = "quarkus" }
+quarkus-arc = { module = "io.quarkus:quarkus-arc", version.ref = "quarkus" }
+quarkus-arc-deployment = { module = "io.quarkus:quarkus-arc-deployment", version.ref = "quarkus" }
+quarkus-agroal = { module = "io.quarkus:quarkus-agroal", version.ref = "quarkus" }
+quarkus-agroal-deployment = { module = "io.quarkus:quarkus-agroal-deployment", version.ref = "quarkus" }
+quarkus-datasource-deployment = { module = "io.quarkus:quarkus-datasource-deployment", version.ref = "quarkus" }
+quarkus-jdbc-postgresql = { module = "io.quarkus:quarkus-jdbc-postgresql", version.ref = "quarkus" }
+quarkus-smallrye-health = { module = "io.quarkus:quarkus-smallrye-health", version.ref = "quarkus" }
+quarkus-micrometer = { module = "io.quarkus:quarkus-micrometer", version.ref = "quarkus" }
+quarkus-micrometer-registry-prometheus = { module = "io.quarkus:quarkus-micrometer-registry-prometheus", version.ref = "quarkus" }
+quarkus-kotlin = { module = "io.quarkus:quarkus-kotlin", version.ref = "quarkus" }
+slf4j-jboss-logmanager = { module = "org.jboss.slf4j:slf4j-jboss-logmanager", version = "2.0.0.Final" }
+quarkus-extension-processor = { module = "io.quarkus:quarkus-extension-processor", version.ref = "quarkus" }
+quarkus-junit5 = { module = "io.quarkus:quarkus-junit5", version.ref = "quarkus" }
+quarkus-junit5-internal = { module = "io.quarkus:quarkus-junit5-internal", version.ref = "quarkus" }
+
+# --- Test ---
+postgresql = { module = "org.postgresql:postgresql", version.ref = "postgresql" }
+hikaricp = { module = "com.zaxxer:HikariCP", version.ref = "hikari" }
+junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
+junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
+assertj = { module = "org.assertj:assertj-core", version.ref = "assertj" }
+awaitility = { module = "org.awaitility:awaitility", version.ref = "awaitility" }
+logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+
+[plugins]
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+quarkus = { id = "io.quarkus", version.ref = "quarkus" }
+quarkus-extension = { id = "io.quarkus.extension", version.ref = "quarkus" }
+maven-publish = { id = "com.vanniktech.maven.publish", version.ref = "mavenPublish" }
+dokka = { id = "org.jetbrains.dokka", version.ref = "dokka" }

@@ -1,0 +1,57 @@
+name: Build
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A force-push or a second push to the same PR makes the running job pointless.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    # Every test in this repository runs against a real PGMQ, on purpose: the library's behaviour
+    # depends on locking and visibility semantics that a mock cannot reproduce.
+    services:
+      postgres:
+        image: ghcr.io/pgmq/pg18-pgmq:v1.10.0
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v5
+
+      # The image ships the extension but does not create it in the database.
+      - name: Enable the pgmq extension
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d postgres -c 'CREATE EXTENSION IF NOT EXISTS pgmq;'
+
+      - name: Build and test
+        run: ./gradlew build --stacktrace
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: '*/build/reports/tests/**'
+          retention-days: 7

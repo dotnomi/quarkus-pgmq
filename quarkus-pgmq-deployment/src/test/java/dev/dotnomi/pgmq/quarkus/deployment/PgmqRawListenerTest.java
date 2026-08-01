@@ -2,7 +2,7 @@ package dev.dotnomi.pgmq.quarkus.deployment;
 
 import dev.dotnomi.pgmq.PgmqTemplate;
 import dev.dotnomi.pgmq.quarkus.PgmqListener;
-import io.quarkus.test.QuarkusUnitTest;
+import io.quarkus.test.QuarkusExtensionTest;
 import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
 import org.assertj.core.api.Assertions;
@@ -27,7 +27,7 @@ public class PgmqRawListenerTest {
     static final String QUEUE = "ext_raw_listener";
 
     @RegisterExtension
-    static final QuarkusUnitTest TEST = new QuarkusUnitTest()
+    static final QuarkusExtensionTest TEST = new QuarkusExtensionTest()
             .setArchiveProducer(() -> ShrinkWrap.create(JavaArchive.class).addClasses(Router.class))
             .overrideConfigKey("quarkus.datasource.db-kind", "postgresql")
             .overrideConfigKey("quarkus.datasource.jdbc.url",

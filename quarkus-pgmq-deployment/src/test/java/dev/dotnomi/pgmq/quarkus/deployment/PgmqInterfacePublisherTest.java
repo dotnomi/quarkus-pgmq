@@ -5,7 +5,7 @@ import dev.dotnomi.pgmq.PgmqTemplate;
 import dev.dotnomi.pgmq.quarkus.PgmqHeader;
 import dev.dotnomi.pgmq.quarkus.PgmqLabel;
 import dev.dotnomi.pgmq.quarkus.PgmqPublisher;
-import io.quarkus.test.QuarkusUnitTest;
+import io.quarkus.test.QuarkusExtensionTest;
 import jakarta.inject.Inject;
 import org.jboss.shrinkwrap.api.ShrinkWrap;
 import org.jboss.shrinkwrap.api.spec.JavaArchive;
@@ -28,7 +28,7 @@ public class PgmqInterfacePublisherTest {
     static final String QUEUE = "ext_iface_publisher";
 
     @RegisterExtension
-    static final QuarkusUnitTest TEST = new QuarkusUnitTest()
+    static final QuarkusExtensionTest TEST = new QuarkusExtensionTest()
             .setArchiveProducer(() -> ShrinkWrap.create(JavaArchive.class)
                     .addClasses(Mails.class, Mail.class))
             .overrideConfigKey("quarkus.datasource.db-kind", "postgresql")

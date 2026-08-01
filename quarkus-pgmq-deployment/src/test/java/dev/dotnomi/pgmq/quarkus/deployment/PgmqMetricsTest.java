@@ -4,7 +4,7 @@ import dev.dotnomi.pgmq.PgmqTemplate;
 import dev.dotnomi.pgmq.quarkus.PgmqListener;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
-import io.quarkus.test.QuarkusUnitTest;
+import io.quarkus.test.QuarkusExtensionTest;
 import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
 import org.jboss.shrinkwrap.api.ShrinkWrap;
@@ -29,7 +29,7 @@ public class PgmqMetricsTest {
     static final String QUEUE = "ext_metrics";
 
     @RegisterExtension
-    static final QuarkusUnitTest TEST = new QuarkusUnitTest()
+    static final QuarkusExtensionTest TEST = new QuarkusExtensionTest()
             .setArchiveProducer(() -> ShrinkWrap.create(JavaArchive.class).addClasses(Counter.class))
             .overrideConfigKey("pgmq.metrics.enabled", "true")
             .overrideConfigKey("pgmq.metrics.queue-poll-interval", "PT1S")

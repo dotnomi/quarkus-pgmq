@@ -1,7 +1,7 @@
 package dev.dotnomi.pgmq.quarkus.deployment;
 
 import dev.dotnomi.pgmq.quarkus.PgmqPublisher;
-import io.quarkus.test.QuarkusUnitTest;
+import io.quarkus.test.QuarkusExtensionTest;
 import org.jboss.shrinkwrap.api.ShrinkWrap;
 import org.jboss.shrinkwrap.api.spec.JavaArchive;
 import org.junit.jupiter.api.Assertions;
@@ -17,7 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class PgmqAbstractPublisherTest {
 
     @RegisterExtension
-    static final QuarkusUnitTest TEST = new QuarkusUnitTest()
+    static final QuarkusExtensionTest TEST = new QuarkusExtensionTest()
             .setArchiveProducer(() -> ShrinkWrap.create(JavaArchive.class).addClasses(HalfBaked.class))
             .assertException(t -> assertThat(t)
                     .hasMessageContaining("is abstract")
